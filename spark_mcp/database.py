@@ -24,15 +24,17 @@ class SparkDatabase:
             raise FileNotFoundError(f"Search database not found at {self.search_db_path}")
 
     def _connect_messages(self) -> sqlite3.Connection:
-        """Connect to messages database in read-only mode."""
-        conn = sqlite3.connect(f"file:{self.messages_db_path}?mode=ro", uri=True)
+        """Connect to messages database in read-only mode with timeout."""
+        conn = sqlite3.connect(f"file:{self.messages_db_path}?mode=ro", uri=True, timeout=5.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only = ON")
         return conn
 
     def _connect_search(self) -> sqlite3.Connection:
-        """Connect to search database in read-only mode."""
-        conn = sqlite3.connect(f"file:{self.search_db_path}?mode=ro", uri=True)
+        """Connect to search database in read-only mode with timeout."""
+        conn = sqlite3.connect(f"file:{self.search_db_path}?mode=ro", uri=True, timeout=5.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only = ON")
         return conn
 
     def list_transcripts(
