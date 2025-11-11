@@ -10,12 +10,8 @@ from mcp.server.stdio import stdio_server
 from .database import SparkDatabase
 
 
-# Initialize database
-try:
-    db = SparkDatabase()
-except Exception as e:
-    print(f"Error: Failed to connect to Spark databases: {e}", flush=True)
-    raise
+# Initialize database (errors will be logged by MCP framework)
+db = SparkDatabase()
 
 
 # Create server instance
