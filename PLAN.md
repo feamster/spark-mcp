@@ -529,3 +529,283 @@ If Spark updates their database schema:
 - ✅ Sub-second query performance
 - ✅ No Spark database corruption
 - ✅ Works offline
+
+## MCP Server Development Best Practices (Lessons Learned)
+
+### Critical Issues Encountered and Solutions
+
+#### 1. **Stdio Contamination** (CRITICAL - Server Won't Connect)
+
+**Problem:** The MCP protocol uses stdio (stdin/stdout) for JSON-RPC communication. ANY output to stdout/stderr breaks the protocol.
+
+**Symptoms:**
+- Claude Desktop shows "this isn't working right now" errors
+- Server appears to start in logs but tools don't work
+- No error details provided to user
+
+**Root Cause:**
+```python
+# ❌ THIS BREAKS MCP PROTOCOL
+try:
+    db = SparkDatabase()
+except Exception as e:
+    print(f"Error: Failed to connect: {e}", flush=True)  # BREAKS STDIO!
+    raise
+```
+
+**Solution:**
+```python
+# ✅ Let MCP framework handle errors
+db = SparkDatabase()  # Errors logged by MCP framework
+```
+
+**Key Takeaways:**
+- NEVER use `print()`, `console.log()`, or any stdout/stderr output
+- MCP framework will log errors automatically
+- Use proper logging libraries if needed (configure to file output)
+- Test server initialization without any console output
+
+#### 2. **Tool Description Bloat** (Performance Issue)
+
+**Problem:** Verbose tool descriptions and parameter documentation caused performance issues in Claude Desktop.
+
+**Before (5000+ characters):**
+```python
+Tool(
+    name="list_meeting_transcripts",
+    description=(
+        "List meeting transcripts with metadata. Returns transcripts sorted by date (newest first). "
+        "Supports filtering by date range and type. Includes both calendar-based meetings and ad-hoc transcriptions. "
+        "Use this tool when you need to see available transcripts..."  # etc etc
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "startDate": {
+                "type": "string",
+                "description": "Filter transcripts after this ISO date (e.g., '2025-01-01'). Use ISO 8601 format..."
+            },
+            # ... 6 more verbose parameters
+        }
+    }
+)
+```
+
+**After (1290 characters total for all 4 tools):**
+```python
+Tool(
+    name="list_meeting_transcripts",
+    description="List recent meeting transcripts",
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "limit": {"type": "number", "description": "Max results (default: 10)", "default": 10}
+        }
+    }
+)
+```
+
+**Key Takeaways:**
+- Keep descriptions under 10 words
+- Remove usage examples from descriptions
+- Minimize parameters (only what's essential)
+- Total tool definitions should be <2000 chars
+- Claude can figure out how to use tools from minimal descriptions
+
+#### 3. **Response Size Management** (Timeout/Performance Issue)
+
+**Problem:** Large default limits caused timeouts and performance issues.
+
+**Before:**
+- `list_transcripts`: default 50 results
+- `search_transcripts`: default 20 results
+- `get_transcript`: could return 30KB+ of text
+- Total response size: up to 100KB+
+
+**After:**
+- `list_transcripts`: default 10 results
+- `search_transcripts`: default 5 results
+- Response sizes: typically <5KB
+
+**Key Takeaways:**
+- Start with SMALL limits (5-10 results)
+- Users can request more if needed
+- Large responses cause:
+  - Network timeouts
+  - Claude processing delays
+  - UI lag in Claude Desktop
+- Better to make multiple small requests than one huge one
+
+#### 4. **Database Query Timeouts** (Reliability Issue)
+
+**Problem:** Queries could hang indefinitely, causing tool calls to timeout.
+
+**Solution:**
+```python
+# ✅ Add timeouts to all database connections
+conn = sqlite3.connect(
+    f"file:{db_path}?mode=ro",
+    uri=True,
+    timeout=5.0  # 5 second timeout
+)
+conn.execute("PRAGMA query_only = ON")  # Extra safety
+```
+
+**Key Takeaways:**
+- ALWAYS set database timeouts (5 seconds is good)
+- Use `PRAGMA query_only = ON` for read-only safety
+- Test with slow queries to verify timeout behavior
+- Better to fail fast than hang forever
+
+#### 5. **Parameter Complexity** (Usability Issue)
+
+**Problem:** Too many optional parameters confused Claude and caused errors.
+
+**Before:**
+```python
+def list_transcripts(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    include_ad_hoc: bool = True,
+    only_kept: bool = True,
+    limit: int = 50,
+    offset: int = 0
+) -> Dict[str, Any]:
+```
+
+**After:**
+```python
+def list_transcripts(
+    limit: int = 10,
+    only_kept: bool = True
+) -> Dict[str, Any]:
+```
+
+**Key Takeaways:**
+- Minimize optional parameters
+- Use sensible defaults for everything
+- Required parameters should be truly required
+- Claude struggles with complex parameter combinations
+- Simpler APIs = fewer errors
+
+### Development Workflow Best Practices
+
+#### Testing Checklist
+
+Before deploying MCP server changes:
+
+1. **Static checks:**
+   ```bash
+   grep -r "print(" *.py  # Should return nothing
+   ```
+
+2. **Local testing:**
+   ```bash
+   python test_server.py  # Verify database queries work
+   ```
+
+3. **Response size check:**
+   ```python
+   result = db.list_transcripts(limit=10)
+   print(len(json.dumps(result)))  # Should be <10KB
+   ```
+
+4. **Restart Claude Desktop:**
+   - Always restart after config changes
+   - Check logs: `~/Library/Logs/Claude/mcp-server-spark.log`
+   - Verify tools appear in Claude UI
+
+5. **Test tool calls:**
+   - Start with simplest tool (statistics)
+   - Then list with small limit
+   - Then search with simple query
+   - Finally get full transcript
+
+#### When Claude Desktop Shows Errors
+
+**Error: "this isn't working right now"**
+
+Possible causes (in order of likelihood):
+1. ✅ **Stdio contamination** - Check for print statements
+2. ✅ **Initialization failure** - Check server logs
+3. ✅ **Tool description too large** - Simplify descriptions
+4. ⚠️ **Response too large** - Reduce default limits
+5. ⚠️ **Query timeout** - Add database timeouts
+6. ⚠️ **Claude Desktop issue** - Try disabling all MCP servers
+
+**Debugging steps:**
+1. Check logs: `tail -f ~/Library/Logs/Claude/mcp-server-spark.log`
+2. Look for "Server started and connected successfully"
+3. Look for "Message from client" / "Message from server"
+4. If no messages, check stdio contamination
+5. If messages but errors, check response sizes
+
+### Design Principles for MCP Servers
+
+1. **Simplicity First**
+   - Start with 2-3 tools maximum
+   - Add complexity only when needed
+   - Each tool should do ONE thing well
+
+2. **Performance Matters**
+   - Keep responses small (<10KB typical)
+   - Add timeouts everywhere (5 seconds)
+   - Test with realistic data volumes
+
+3. **Silent Operation**
+   - No stdout/stderr output EVER
+   - Let MCP framework handle logging
+   - Errors should be returned as tool results
+
+4. **Fail Gracefully**
+   - Return error messages as strings
+   - Don't raise exceptions for expected failures
+   - Provide helpful error messages
+
+5. **User-Centric**
+   - Minimal required parameters
+   - Sensible defaults for everything
+   - Clear, brief tool descriptions
+
+### Example: Minimal Working Tool
+
+```python
+Tool(
+    name="get_stats",
+    description="Get transcript statistics",
+    inputSchema={"type": "object", "properties": {}}
+)
+
+@server.call_tool()
+async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
+    try:
+        if name == "get_stats":
+            result = db.get_statistics()
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+        else:
+            return [TextContent(type="text", text=f"Unknown tool: {name}")]
+    except Exception as e:
+        return [TextContent(type="text", text=f"Error: {str(e)}")]
+```
+
+### What NOT To Do
+
+❌ **Don't add these "features":**
+- Verbose logging to stdout
+- Complex parameter validation with error messages
+- Large default result sets (>20 items)
+- Optional parameters "just in case"
+- Detailed usage documentation in descriptions
+- Multiple ways to call the same tool
+- Synchronous operations without timeouts
+- Error handling that prints to console
+
+✅ **Do this instead:**
+- Silent operation (MCP handles logging)
+- Return errors as tool results
+- Small default result sets (5-10 items)
+- Minimal required parameters
+- Brief descriptions (3-5 words)
+- One clear way to do each thing
+- Async operations with timeouts
+- Return errors as JSON/text responses
