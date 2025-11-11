@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "spark": {
+      "command": "python3",
+      "args": ["-m", "spark_mcp.server"],
+      "cwd": "/Users/feamster/src/spark-mcp"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+spark_mcp/__init__.py
+spark_mcp/database.py
+spark_mcp/server.py
+spark_mcp_server.egg-info/PKG-INFO
+spark_mcp_server.egg-info/SOURCES.txt
+spark_mcp_server.egg-info/dependency_links.txt
+spark_mcp_server.egg-info/entry_points.txt
+spark_mcp_server.egg-info/requires.txt
+spark_mcp_server.egg-info/top_level.txt

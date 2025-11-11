@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlite3:*)",
+      "Bash(python3 -m pip install:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

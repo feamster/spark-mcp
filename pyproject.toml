@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spark-mcp-server"
+version = "1.0.0"
+description = "MCP server for accessing Spark Desktop meeting transcripts"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+]
+
+[project.scripts]
+spark-mcp = "spark_mcp.server:main"
