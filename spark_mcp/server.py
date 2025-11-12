@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Spark MCP Server - Provides access to Spark Desktop meeting transcripts."""
+"""Spark MCP Server - Access Spark Desktop transcripts, emails, and calendar."""
 
 import asyncio
 import json
@@ -18,45 +18,158 @@ db = SparkDatabase()
 server = Server("spark-mcp-server")
 
 
-# Define tools - simplified descriptions and reduced limits
+# Define tools - optimized with minimal descriptions and small limits
 TOOLS: list[Tool] = [
+    # TRANSCRIPT TOOLS
     Tool(
         name="list_meeting_transcripts",
         description="List recent meeting transcripts",
         inputSchema={
             "type": "object",
             "properties": {
-                "limit": {"type": "number", "description": "Max results (default: 10)", "default": 10}
+                "limit": {"type": "number", "description": "Max results", "default": 10}
             }
         }
     ),
     Tool(
         name="get_meeting_transcript",
-        description="Get full transcript by messagePk",
+        description="Get full transcript by ID",
         inputSchema={
             "type": "object",
             "properties": {
-                "messagePk": {"type": "number", "description": "Message PK"}
+                "messagePk": {"type": "number", "description": "Message ID"}
             },
             "required": ["messagePk"]
         }
     ),
     Tool(
         name="search_meeting_transcripts",
-        description="Search transcripts by keyword",
+        description="Search transcript content",
         inputSchema={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Search query"},
-                "limit": {"type": "number", "description": "Max results (default: 5)", "default": 5}
+                "query": {"type": "string", "description": "Search terms"},
+                "limit": {"type": "number", "description": "Max results", "default": 5}
             },
             "required": ["query"]
         }
     ),
     Tool(
         name="get_transcript_statistics",
-        description="Get transcript stats and counts",
+        description="Get transcript stats",
         inputSchema={"type": "object", "properties": {}}
+    ),
+
+    # EMAIL TOOLS
+    Tool(
+        name="list_emails",
+        description="List recent emails",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "folder": {"type": "string", "description": "inbox/sent/all", "default": "inbox"},
+                "limit": {"type": "number", "description": "Max results", "default": 10}
+            }
+        }
+    ),
+    Tool(
+        name="search_emails",
+        description="Search email content",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search terms"},
+                "limit": {"type": "number", "description": "Max results", "default": 5}
+            },
+            "required": ["query"]
+        }
+    ),
+    Tool(
+        name="get_email",
+        description="Get full email by ID",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "messagePk": {"type": "number", "description": "Message ID"}
+            },
+            "required": ["messagePk"]
+        }
+    ),
+    Tool(
+        name="find_action_items",
+        description="Find emails with todos",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "days": {"type": "number", "description": "Days back", "default": 7},
+                "limit": {"type": "number", "description": "Max results", "default": 10}
+            }
+        }
+    ),
+    Tool(
+        name="find_pending_responses",
+        description="Find emails needing replies",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "days": {"type": "number", "description": "Days back", "default": 7},
+                "limit": {"type": "number", "description": "Max results", "default": 10}
+            }
+        }
+    ),
+
+    # CALENDAR TOOLS
+    Tool(
+        name="list_events",
+        description="List calendar events",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "daysAhead": {"type": "number", "description": "Days ahead", "default": 1},
+                "limit": {"type": "number", "description": "Max results", "default": 10}
+            }
+        }
+    ),
+    Tool(
+        name="get_event_details",
+        description="Get event details by ID",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "eventPk": {"type": "number", "description": "Event ID"}
+            },
+            "required": ["eventPk"]
+        }
+    ),
+    Tool(
+        name="find_events_needing_prep",
+        description="Find events needing preparation",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "hoursAhead": {"type": "number", "description": "Hours ahead", "default": 24},
+                "limit": {"type": "number", "description": "Max results", "default": 10}
+            }
+        }
+    ),
+
+    # COMBINED INTELLIGENCE
+    Tool(
+        name="get_daily_briefing",
+        description="Get today's briefing",
+        inputSchema={"type": "object", "properties": {}}
+    ),
+    Tool(
+        name="find_context_for_meeting",
+        description="Find emails for meeting",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "eventPk": {"type": "number", "description": "Event ID"},
+                "daysBack": {"type": "number", "description": "Days back", "default": 30}
+            },
+            "required": ["eventPk"]
+        }
     )
 ]
 
@@ -71,6 +184,7 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
     """Handle tool calls."""
     try:
+        # TRANSCRIPT TOOLS
         if name == "list_meeting_transcripts":
             result = db.list_transcripts(
                 limit=int(arguments.get("limit", 10)),
@@ -93,13 +207,92 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
                 return [TextContent(type="text", text="Error: query required")]
             result = db.search_transcripts(
                 query=query,
-                limit=int(arguments.get("limit", 5)),
-                include_context=True
+                limit=int(arguments.get("limit", 5))
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         elif name == "get_transcript_statistics":
             result = db.get_statistics()
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        # EMAIL TOOLS
+        elif name == "list_emails":
+            result = db.list_emails(
+                folder=arguments.get("folder", "inbox"),
+                limit=int(arguments.get("limit", 10))
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "search_emails":
+            query = arguments.get("query")
+            if not query:
+                return [TextContent(type="text", text="Error: query required")]
+            result = db.search_emails(
+                query=query,
+                limit=int(arguments.get("limit", 5))
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "get_email":
+            message_pk = arguments.get("messagePk")
+            if not message_pk:
+                return [TextContent(type="text", text="Error: messagePk required")]
+            result = db.get_email(int(message_pk))
+            if result is None:
+                return [TextContent(type="text", text="Email not found")]
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "find_action_items":
+            result = db.find_action_items(
+                days=int(arguments.get("days", 7)),
+                limit=int(arguments.get("limit", 10))
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "find_pending_responses":
+            result = db.find_pending_responses(
+                days=int(arguments.get("days", 7)),
+                limit=int(arguments.get("limit", 10))
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        # CALENDAR TOOLS
+        elif name == "list_events":
+            result = db.list_events(
+                days_ahead=int(arguments.get("daysAhead", 1)),
+                limit=int(arguments.get("limit", 10))
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "get_event_details":
+            event_pk = arguments.get("eventPk")
+            if not event_pk:
+                return [TextContent(type="text", text="Error: eventPk required")]
+            result = db.get_event_details(int(event_pk))
+            if result is None:
+                return [TextContent(type="text", text="Event not found")]
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "find_events_needing_prep":
+            result = db.find_events_needing_prep(
+                hours_ahead=int(arguments.get("hoursAhead", 24)),
+                limit=int(arguments.get("limit", 10))
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        # COMBINED INTELLIGENCE
+        elif name == "get_daily_briefing":
+            result = db.get_daily_briefing()
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "find_context_for_meeting":
+            event_pk = arguments.get("eventPk")
+            if not event_pk:
+                return [TextContent(type="text", text="Error: eventPk required")]
+            result = db.find_context_for_meeting(
+                event_pk=int(event_pk),
+                days_back=int(arguments.get("daysBack", 30))
+            )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         else:
