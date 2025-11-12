@@ -27,7 +27,7 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "limit": {"type": "number", "description": "Max results", "default": 10}
+                "limit": {"type": "number", "description": "Max results", "default": 20}
             }
         }
     ),
@@ -49,7 +49,7 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search terms"},
-                "limit": {"type": "number", "description": "Max results", "default": 5}
+                "limit": {"type": "number", "description": "Max results", "default": 10}
             },
             "required": ["query"]
         }
@@ -68,7 +68,7 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "folder": {"type": "string", "description": "inbox/sent/all", "default": "inbox"},
-                "limit": {"type": "number", "description": "Max results", "default": 10}
+                "limit": {"type": "number", "description": "Max results", "default": 20}
             }
         }
     ),
@@ -79,7 +79,7 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search terms"},
-                "limit": {"type": "number", "description": "Max results", "default": 5}
+                "limit": {"type": "number", "description": "Max results", "default": 10}
             },
             "required": ["query"]
         }
@@ -102,7 +102,7 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "days": {"type": "number", "description": "Days back", "default": 7},
-                "limit": {"type": "number", "description": "Max results", "default": 10}
+                "limit": {"type": "number", "description": "Max results", "default": 20}
             }
         }
     ),
@@ -113,7 +113,7 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "days": {"type": "number", "description": "Days back", "default": 7},
-                "limit": {"type": "number", "description": "Max results", "default": 10}
+                "limit": {"type": "number", "description": "Max results", "default": 20}
             }
         }
     ),
@@ -126,7 +126,7 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "daysAhead": {"type": "number", "description": "Days ahead", "default": 1},
-                "limit": {"type": "number", "description": "Max results", "default": 10}
+                "limit": {"type": "number", "description": "Max results", "default": 20}
             }
         }
     ),
@@ -148,7 +148,7 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "hoursAhead": {"type": "number", "description": "Hours ahead", "default": 24},
-                "limit": {"type": "number", "description": "Max results", "default": 10}
+                "limit": {"type": "number", "description": "Max results", "default": 20}
             }
         }
     ),
@@ -187,7 +187,7 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
         # TRANSCRIPT TOOLS
         if name == "list_meeting_transcripts":
             result = db.list_transcripts(
-                limit=int(arguments.get("limit", 10)),
+                limit=int(arguments.get("limit", 20)),
                 only_kept=True
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -207,7 +207,7 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
                 return [TextContent(type="text", text="Error: query required")]
             result = db.search_transcripts(
                 query=query,
-                limit=int(arguments.get("limit", 5))
+                limit=int(arguments.get("limit", 10))
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
@@ -219,7 +219,7 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
         elif name == "list_emails":
             result = db.list_emails(
                 folder=arguments.get("folder", "inbox"),
-                limit=int(arguments.get("limit", 10))
+                limit=int(arguments.get("limit", 20))
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
@@ -229,7 +229,7 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
                 return [TextContent(type="text", text="Error: query required")]
             result = db.search_emails(
                 query=query,
-                limit=int(arguments.get("limit", 5))
+                limit=int(arguments.get("limit", 10))
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
@@ -245,14 +245,14 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
         elif name == "find_action_items":
             result = db.find_action_items(
                 days=int(arguments.get("days", 7)),
-                limit=int(arguments.get("limit", 10))
+                limit=int(arguments.get("limit", 20))
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         elif name == "find_pending_responses":
             result = db.find_pending_responses(
                 days=int(arguments.get("days", 7)),
-                limit=int(arguments.get("limit", 10))
+                limit=int(arguments.get("limit", 20))
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
@@ -260,7 +260,7 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
         elif name == "list_events":
             result = db.list_events(
                 days_ahead=int(arguments.get("daysAhead", 1)),
-                limit=int(arguments.get("limit", 10))
+                limit=int(arguments.get("limit", 20))
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
@@ -276,7 +276,7 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
         elif name == "find_events_needing_prep":
             result = db.find_events_needing_prep(
                 hours_ahead=int(arguments.get("hoursAhead", 24)),
-                limit=int(arguments.get("limit", 10))
+                limit=int(arguments.get("limit", 20))
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
