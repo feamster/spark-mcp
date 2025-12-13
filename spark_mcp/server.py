@@ -170,6 +170,44 @@ TOOLS: list[Tool] = [
             },
             "required": ["eventPk"]
         }
+    ),
+
+    # ATTACHMENT TOOLS
+    Tool(
+        name="list_attachments",
+        description="List attachments for an email",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "messagePk": {"type": "number", "description": "Message ID"}
+            },
+            "required": ["messagePk"]
+        }
+    ),
+    Tool(
+        name="get_attachment",
+        description="Get attachment content with text extraction for PDFs/docs",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "messagePk": {"type": "number", "description": "Message ID"},
+                "attachmentIndex": {"type": "number", "description": "Attachment index (0-based)", "default": 0},
+                "extractText": {"type": "boolean", "description": "Extract text from PDFs/docs", "default": True}
+            },
+            "required": ["messagePk"]
+        }
+    ),
+    Tool(
+        name="search_attachments",
+        description="Search for emails with attachments",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string", "description": "Filename pattern (use * as wildcard)"},
+                "mimeType": {"type": "string", "description": "MIME type filter (e.g., application/pdf)"},
+                "limit": {"type": "number", "description": "Max results", "default": 20}
+            }
+        }
     )
 ]
 
@@ -292,6 +330,35 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
             result = db.find_context_for_meeting(
                 event_pk=int(event_pk),
                 days_back=int(arguments.get("daysBack", 30))
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        # ATTACHMENT TOOLS
+        elif name == "list_attachments":
+            message_pk = arguments.get("messagePk")
+            if not message_pk:
+                return [TextContent(type="text", text="Error: messagePk required")]
+            result = db.list_attachments(int(message_pk))
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "get_attachment":
+            message_pk = arguments.get("messagePk")
+            if not message_pk:
+                return [TextContent(type="text", text="Error: messagePk required")]
+            result = db.get_attachment(
+                message_pk=int(message_pk),
+                attachment_index=int(arguments.get("attachmentIndex", 0)),
+                extract_text=arguments.get("extractText", True)
+            )
+            if result is None:
+                return [TextContent(type="text", text="Attachment not found")]
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "search_attachments":
+            result = db.search_attachments(
+                filename=arguments.get("filename"),
+                mime_type=arguments.get("mimeType"),
+                limit=int(arguments.get("limit", 20))
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 

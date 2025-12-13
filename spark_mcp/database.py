@@ -8,6 +8,7 @@ from datetime import datetime
 
 
 SPARK_BASE = Path.home() / "Library/Containers/com.readdle.SparkDesktop.appstore/Data/Library/Application Support/Spark Desktop/core-data"
+SPARK_CACHE = Path.home() / "Library/Containers/com.readdle.SparkDesktop.appstore/Data/Library/Caches/Spark Desktop"
 
 
 class SparkDatabase:
@@ -1073,6 +1074,237 @@ class SparkDatabase:
         conn.close()
         events = events[:limit]
         return {'events': events, 'total': len(events)}
+
+    # ============================================================================
+    # ATTACHMENT METHODS
+    # ============================================================================
+
+    def list_attachments(self, message_pk: int) -> Dict[str, Any]:
+        """List attachments for a specific email.
+
+        Args:
+            message_pk: Message primary key
+
+        Returns:
+            Dict with 'attachments' list and 'total' count
+        """
+        conn = self._connect_messages()
+
+        cursor = conn.execute("""
+            SELECT
+                pk,
+                attachmentName,
+                attachmentMIMEType,
+                attachmentSize,
+                attachmentId,
+                status
+            FROM messageAttachment
+            WHERE messagePk = ?
+            ORDER BY pk
+        """, (message_pk,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        attachments = []
+        for i, row in enumerate(rows):
+            # Check if file exists locally
+            file_path = self._get_attachment_path(message_pk, row['attachmentName'])
+            is_downloaded = file_path.exists() if file_path else False
+
+            attachments.append({
+                'attachmentPk': row['pk'],
+                'filename': row['attachmentName'] or f'attachment_{i}',
+                'mimeType': row['attachmentMIMEType'] or 'application/octet-stream',
+                'size': row['attachmentSize'] or 0,
+                'attachmentId': row['attachmentId'],
+                'index': i,
+                'isDownloaded': is_downloaded
+            })
+
+        return {'attachments': attachments, 'total': len(attachments)}
+
+    def get_attachment(
+        self,
+        message_pk: int,
+        attachment_index: int = 0,
+        extract_text: bool = True
+    ) -> Optional[Dict[str, Any]]:
+        """Get attachment content with optional text extraction.
+
+        Args:
+            message_pk: Message primary key
+            attachment_index: Index of attachment (0-based)
+            extract_text: Whether to extract text from PDFs/docs
+
+        Returns:
+            Dict with attachment content or None if not found
+        """
+        from .extractors import extract_text as do_extract_text
+
+        conn = self._connect_messages()
+
+        cursor = conn.execute("""
+            SELECT
+                pk,
+                attachmentName,
+                attachmentMIMEType,
+                attachmentSize,
+                attachmentId
+            FROM messageAttachment
+            WHERE messagePk = ?
+            ORDER BY pk
+            LIMIT 1 OFFSET ?
+        """, (message_pk, attachment_index))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        filename = row['attachmentName'] or f'attachment_{attachment_index}'
+        mime_type = row['attachmentMIMEType'] or 'application/octet-stream'
+        file_path = self._get_attachment_path(message_pk, filename)
+
+        if not file_path or not file_path.exists():
+            return {
+                'messagePk': message_pk,
+                'attachmentPk': row['pk'],
+                'filename': filename,
+                'mimeType': mime_type,
+                'size': row['attachmentSize'] or 0,
+                'content': None,
+                'contentType': 'not_downloaded',
+                'error': 'Attachment not downloaded locally. Open the email in Spark to download.'
+            }
+
+        if extract_text:
+            content, content_type = do_extract_text(str(file_path), mime_type)
+        else:
+            import base64
+            content = base64.b64encode(file_path.read_bytes()).decode()
+            content_type = 'base64'
+
+        return {
+            'messagePk': message_pk,
+            'attachmentPk': row['pk'],
+            'filename': filename,
+            'mimeType': mime_type,
+            'size': row['attachmentSize'] or 0,
+            'content': content,
+            'contentType': content_type
+        }
+
+    def search_attachments(
+        self,
+        filename: Optional[str] = None,
+        mime_type: Optional[str] = None,
+        limit: int = 20
+    ) -> Dict[str, Any]:
+        """Search for emails with attachments matching criteria.
+
+        Args:
+            filename: Filename pattern (supports SQL wildcards %)
+            mime_type: Filter by MIME type
+            limit: Maximum results
+
+        Returns:
+            Dict with 'results' list and 'total' count
+        """
+        conn = self._connect_messages()
+
+        where_clauses = []
+        params = []
+
+        if filename:
+            # Support * as wildcard, convert to SQL %
+            sql_pattern = filename.replace('*', '%')
+            where_clauses.append("a.attachmentName LIKE ?")
+            params.append(sql_pattern)
+
+        if mime_type:
+            if mime_type.endswith('/*'):
+                # Handle type/* patterns like "application/*"
+                base_type = mime_type[:-1]
+                where_clauses.append("a.attachmentMIMEType LIKE ?")
+                params.append(f"{base_type}%")
+            else:
+                where_clauses.append("a.attachmentMIMEType = ?")
+                params.append(mime_type)
+
+        where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
+
+        query = f"""
+            SELECT
+                m.pk as messagePk,
+                m.subject,
+                m.messageFrom as sender,
+                datetime(m.receivedDate, 'unixepoch') as receivedDate,
+                a.pk as attachmentPk,
+                a.attachmentName,
+                a.attachmentMIMEType,
+                a.attachmentSize
+            FROM messageAttachment a
+            JOIN messages m ON a.messagePk = m.pk
+            WHERE {where_clause}
+            ORDER BY m.receivedDate DESC
+            LIMIT ?
+        """
+        params.append(limit)
+
+        cursor = conn.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+
+        # Group by message
+        messages = {}
+        for row in rows:
+            pk = row['messagePk']
+            if pk not in messages:
+                messages[pk] = {
+                    'messagePk': pk,
+                    'emailSubject': row['subject'] or '(No Subject)',
+                    'sender': row['sender'] or 'Unknown',
+                    'receivedDate': row['receivedDate'],
+                    'attachments': []
+                }
+            messages[pk]['attachments'].append({
+                'attachmentPk': row['attachmentPk'],
+                'filename': row['attachmentName'],
+                'mimeType': row['attachmentMIMEType'],
+                'size': row['attachmentSize'] or 0
+            })
+
+        results = list(messages.values())
+        return {'results': results, 'total': len(results)}
+
+    def _get_attachment_path(self, message_pk: int, filename: str) -> Optional[Path]:
+        """Get the filesystem path for an attachment.
+
+        Args:
+            message_pk: Message primary key
+            filename: Attachment filename
+
+        Returns:
+            Path object or None if cannot be determined
+        """
+        if not filename:
+            return None
+
+        # Spark stores attachments in: Caches/Spark Desktop/messagesData/1/{messagePk}/{filename}
+        # The "1" appears to be an account ID, checking if the file exists
+        path = SPARK_CACHE / "messagesData" / "1" / str(message_pk) / filename
+        if path.exists():
+            return path
+
+        # Try without account ID subfolder
+        path = SPARK_CACHE / "messagesData" / str(message_pk) / filename
+        if path.exists():
+            return path
+
+        # Return the most likely path even if it doesn't exist yet
+        return SPARK_CACHE / "messagesData" / "1" / str(message_pk) / filename
 
     # ============================================================================
     # COMBINED INTELLIGENCE
