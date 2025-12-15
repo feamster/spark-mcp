@@ -230,11 +230,12 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "filePath": {"type": "string", "description": "Path to source PDF"},
-                "fields": {"type": "object", "description": "Field names mapped to values"},
+                "fields": {"type": "object", "description": "Text field names mapped to string values"},
+                "checkboxes": {"type": "object", "description": "Checkbox field names mapped to boolean values"},
                 "outputPath": {"type": "string", "description": "Output path (default: ~/Downloads)"},
                 "flatten": {"type": "boolean", "description": "Make fields non-editable", "default": False}
             },
-            "required": ["filePath", "fields"]
+            "required": ["filePath"]
         }
     ),
     Tool(
@@ -262,7 +263,9 @@ TOOLS: list[Tool] = [
             "properties": {
                 "filePath": {"type": "string", "description": "Path to source PDF"},
                 "signatureImagePath": {"type": "string", "description": "Path to signature image (optional, uses default)"},
-                "fields": {"type": "object", "description": "Field names mapped to values"},
+                "fields": {"type": "object", "description": "Text field names mapped to string values"},
+                "checkboxes": {"type": "object", "description": "Checkbox field names mapped to boolean values"},
+                "signatureField": {"type": "string", "description": "Form field name to place signature in (auto-positions)"},
                 "page": {"type": "number", "description": "Signature page (1-indexed, -1 for last)", "default": -1},
                 "x": {"type": "number", "description": "Signature X position"},
                 "y": {"type": "number", "description": "Signature Y position"},
@@ -437,13 +440,15 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
         elif name == "fill_pdf_form":
             file_path = arguments.get("filePath")
             fields = arguments.get("fields")
+            checkboxes = arguments.get("checkboxes")
             if not file_path:
                 return [TextContent(type="text", text="Error: filePath required")]
-            if not fields:
-                return [TextContent(type="text", text="Error: fields required")]
+            if not fields and not checkboxes:
+                return [TextContent(type="text", text="Error: fields or checkboxes required")]
             result = pdf_ops.fill_form(
                 pdf_path=file_path,
                 fields=fields,
+                checkboxes=checkboxes,
                 output_path=arguments.get("outputPath"),
                 flatten=arguments.get("flatten", False)
             )
@@ -472,12 +477,14 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
                 pdf_path=file_path,
                 signature_image_path=arguments.get("signatureImagePath"),
                 fields=arguments.get("fields"),
+                checkboxes=arguments.get("checkboxes"),
                 page=int(arguments.get("page", -1)),
                 x=arguments.get("x"),
                 y=arguments.get("y"),
                 width=float(arguments.get("width", 150)),
                 output_path=arguments.get("outputPath"),
-                flatten=arguments.get("flatten", False)
+                flatten=arguments.get("flatten", False),
+                signature_field=arguments.get("signatureField")
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 

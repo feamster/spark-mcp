@@ -2,8 +2,6 @@
 
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-import tempfile
-import shutil
 
 from .config import get_signature_path, get_output_dir
 
@@ -67,7 +65,8 @@ class PDFOperations:
     def fill_form(
         self,
         pdf_path: str,
-        fields: Dict[str, str],
+        fields: Optional[Dict[str, str]] = None,
+        checkboxes: Optional[Dict[str, bool]] = None,
         output_path: Optional[str] = None,
         flatten: bool = False
     ) -> Dict[str, Any]:
@@ -75,14 +74,15 @@ class PDFOperations:
 
         Args:
             pdf_path: Path to the source PDF
-            fields: Dict mapping field names to values
+            fields: Dict mapping field names to string values (for text fields)
+            checkboxes: Dict mapping field names to bool values (for checkboxes)
             output_path: Output path (default: ~/Downloads/{name}_filled.pdf)
             flatten: Whether to flatten the form (make fields non-editable)
 
         Returns:
             Dict with output path and status
         """
-        from pypdf import PdfReader, PdfWriter
+        import fitz  # PyMuPDF
 
         path = Path(pdf_path).expanduser()
         if not path.exists():
@@ -97,28 +97,34 @@ class PDFOperations:
         # Ensure output directory exists
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        reader = PdfReader(str(path))
-        writer = PdfWriter()
+        doc = fitz.open(str(path))
+        fields_updated = 0
 
-        # Clone the PDF
-        writer.append(reader)
+        # Fill form fields using pymupdf widgets
+        for page in doc:
+            for widget in page.widgets():
+                field_name = widget.field_name
 
-        # Fill form fields
-        for page_num in range(len(writer.pages)):
-            writer.update_page_form_field_values(
-                writer.pages[page_num],
-                fields,
-                auto_regenerate=False
-            )
+                # Handle text fields
+                if fields and field_name in fields:
+                    widget.field_value = fields[field_name]
+                    widget.update()
+                    fields_updated += 1
+
+                # Handle checkboxes
+                if checkboxes and field_name in checkboxes:
+                    widget.field_value = checkboxes[field_name]
+                    widget.update()
+                    fields_updated += 1
 
         # Save the result
-        with open(out_path, 'wb') as f:
-            writer.write(f)
+        doc.save(str(out_path))
+        doc.close()
 
         return {
             'success': True,
             'outputPath': str(out_path),
-            'fieldsUpdated': len(fields),
+            'fieldsUpdated': fields_updated,
             'flattened': flatten
         }
 
@@ -224,24 +230,28 @@ class PDFOperations:
         pdf_path: str,
         signature_image_path: Optional[str] = None,
         fields: Optional[Dict[str, str]] = None,
+        checkboxes: Optional[Dict[str, bool]] = None,
         page: int = -1,
         x: Optional[float] = None,
         y: Optional[float] = None,
         width: float = 150,
         output_path: Optional[str] = None,
-        flatten: bool = False
+        flatten: bool = False,
+        signature_field: Optional[str] = None
     ) -> Dict[str, Any]:
         """Fill form fields and add signature in one operation.
 
         Args:
             pdf_path: Path to the source PDF
             signature_image_path: Path to signature image (uses config default if not provided)
-            fields: Dict mapping field names to values (optional)
+            fields: Dict mapping field names to string values (for text fields)
+            checkboxes: Dict mapping field names to bool values (for checkboxes)
             page: Page number for signature (1-indexed, -1 for last)
-            x, y: Signature position coordinates
+            x, y: Signature position coordinates (if not using signature_field)
             width: Signature width in points
             output_path: Output path
             flatten: Whether to flatten form fields
+            signature_field: Name of form field to place signature in (auto-positions)
 
         Returns:
             Dict with output path and status
@@ -272,42 +282,48 @@ class PDFOperations:
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Step 1: Fill form fields if provided
-        if fields:
-            from pypdf import PdfReader, PdfWriter
+        doc = fitz.open(str(path))
+        fields_updated = 0
 
-            reader = PdfReader(str(path))
-            writer = PdfWriter()
-            writer.append(reader)
+        # Fill form fields using pymupdf widgets
+        sig_rect = None
+        sig_page_idx = None
 
-            for page_num in range(len(writer.pages)):
-                writer.update_page_form_field_values(
-                    writer.pages[page_num],
-                    fields,
-                    auto_regenerate=False
-                )
+        for page_idx, doc_page in enumerate(doc):
+            for widget in doc_page.widgets():
+                field_name = widget.field_name
 
-            # Save to temp file for signature step
-            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
-                writer.write(tmp)
-                temp_path = tmp.name
+                # Handle text fields
+                if fields and field_name in fields:
+                    widget.field_value = fields[field_name]
+                    widget.update()
+                    fields_updated += 1
+
+                # Handle checkboxes
+                if checkboxes and field_name in checkboxes:
+                    widget.field_value = checkboxes[field_name]
+                    widget.update()
+                    fields_updated += 1
+
+                # Find signature field position if specified
+                if signature_field and field_name == signature_field:
+                    sig_rect = widget.rect
+                    sig_page_idx = page_idx
+
+        # Determine signature page
+        if sig_page_idx is not None:
+            # Use the page where the signature field was found
+            target_page_idx = sig_page_idx
+        elif page == -1:
+            target_page_idx = len(doc) - 1
         else:
-            temp_path = str(path)
+            target_page_idx = page - 1
 
-        # Step 2: Add signature using PyMuPDF
-        doc = fitz.open(temp_path)
-
-        # Determine page
-        if page == -1:
-            page_idx = len(doc) - 1
-        else:
-            page_idx = page - 1
-
-        if page_idx < 0 or page_idx >= len(doc):
+        if target_page_idx < 0 or target_page_idx >= len(doc):
             doc.close()
             raise ValueError(f"Invalid page number: {page}. PDF has {len(doc)} pages.")
 
-        target_page = doc[page_idx]
+        target_page = doc[target_page_idx]
         page_rect = target_page.rect
 
         # Calculate signature dimensions
@@ -316,29 +332,35 @@ class PDFOperations:
         sig_width = width
         sig_height = width * aspect_ratio
 
-        # Default position
-        margin = 50
-        if x is None:
-            x = page_rect.width - sig_width - margin
-        if y is None:
-            y = page_rect.height - sig_height - margin
+        # Determine signature position
+        if sig_rect is not None:
+            # Use the form field's rect for positioning
+            final_rect = sig_rect
+        else:
+            # Use provided coordinates or default to bottom-right
+            margin = 50
+            if x is None:
+                x = page_rect.width - sig_width - margin
+            if y is None:
+                y = page_rect.height - sig_height - margin
+            final_rect = fitz.Rect(x, y, x + sig_width, y + sig_height)
 
-        sig_rect = fitz.Rect(x, y, x + sig_width, y + sig_height)
-        target_page.insert_image(sig_rect, filename=str(sig_path))
+        target_page.insert_image(final_rect, filename=str(sig_path))
 
         doc.save(str(out_path))
         doc.close()
 
-        # Clean up temp file
-        if fields and temp_path != str(path):
-            Path(temp_path).unlink(missing_ok=True)
-
         return {
             'success': True,
             'outputPath': str(out_path),
-            'fieldsUpdated': len(fields) if fields else 0,
-            'signaturePage': page_idx + 1,
-            'signaturePosition': {'x': x, 'y': y, 'width': sig_width, 'height': sig_height}
+            'fieldsUpdated': fields_updated,
+            'signaturePage': target_page_idx + 1,
+            'signaturePosition': {
+                'x': final_rect.x0,
+                'y': final_rect.y0,
+                'width': final_rect.width,
+                'height': final_rect.height
+            }
         }
 
 
