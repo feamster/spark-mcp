@@ -239,29 +239,29 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="sign_pdf",
-        description="Add signature image to a PDF",
+        description="Add signature image to a PDF (uses configured default signature if not specified)",
         inputSchema={
             "type": "object",
             "properties": {
                 "filePath": {"type": "string", "description": "Path to source PDF"},
-                "signatureImagePath": {"type": "string", "description": "Path to signature image (PNG/JPG)"},
+                "signatureImagePath": {"type": "string", "description": "Path to signature image (optional, uses default)"},
                 "page": {"type": "number", "description": "Page number (1-indexed, -1 for last)", "default": -1},
                 "x": {"type": "number", "description": "X position in points"},
                 "y": {"type": "number", "description": "Y position in points"},
                 "width": {"type": "number", "description": "Signature width in points", "default": 150},
                 "outputPath": {"type": "string", "description": "Output path (default: ~/Downloads)"}
             },
-            "required": ["filePath", "signatureImagePath"]
+            "required": ["filePath"]
         }
     ),
     Tool(
         name="fill_and_sign_pdf",
-        description="Fill form fields and add signature in one step",
+        description="Fill form fields and add signature in one step (uses configured default signature if not specified)",
         inputSchema={
             "type": "object",
             "properties": {
                 "filePath": {"type": "string", "description": "Path to source PDF"},
-                "signatureImagePath": {"type": "string", "description": "Path to signature image"},
+                "signatureImagePath": {"type": "string", "description": "Path to signature image (optional, uses default)"},
                 "fields": {"type": "object", "description": "Field names mapped to values"},
                 "page": {"type": "number", "description": "Signature page (1-indexed, -1 for last)", "default": -1},
                 "x": {"type": "number", "description": "Signature X position"},
@@ -270,7 +270,7 @@ TOOLS: list[Tool] = [
                 "outputPath": {"type": "string", "description": "Output path (default: ~/Downloads)"},
                 "flatten": {"type": "boolean", "description": "Make fields non-editable", "default": False}
             },
-            "required": ["filePath", "signatureImagePath"]
+            "required": ["filePath"]
         }
     )
 ]
@@ -451,14 +451,11 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
 
         elif name == "sign_pdf":
             file_path = arguments.get("filePath")
-            sig_path = arguments.get("signatureImagePath")
             if not file_path:
                 return [TextContent(type="text", text="Error: filePath required")]
-            if not sig_path:
-                return [TextContent(type="text", text="Error: signatureImagePath required")]
             result = pdf_ops.add_signature(
                 pdf_path=file_path,
-                signature_image_path=sig_path,
+                signature_image_path=arguments.get("signatureImagePath"),
                 page=int(arguments.get("page", -1)),
                 x=arguments.get("x"),
                 y=arguments.get("y"),
@@ -469,14 +466,11 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
 
         elif name == "fill_and_sign_pdf":
             file_path = arguments.get("filePath")
-            sig_path = arguments.get("signatureImagePath")
             if not file_path:
                 return [TextContent(type="text", text="Error: filePath required")]
-            if not sig_path:
-                return [TextContent(type="text", text="Error: signatureImagePath required")]
             result = pdf_ops.fill_and_sign(
                 pdf_path=file_path,
-                signature_image_path=sig_path,
+                signature_image_path=arguments.get("signatureImagePath"),
                 fields=arguments.get("fields"),
                 page=int(arguments.get("page", -1)),
                 x=arguments.get("x"),
