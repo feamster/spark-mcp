@@ -8,6 +8,7 @@ from mcp.server import Server
 from mcp.types import Tool, TextContent, GetPromptResult
 from mcp.server.stdio import stdio_server
 from .database import SparkDatabase
+from .pdf_operations import pdf_ops
 
 
 # Initialize database (errors will be logged by MCP framework)
@@ -208,6 +209,69 @@ TOOLS: list[Tool] = [
                 "limit": {"type": "number", "description": "Max results", "default": 20}
             }
         }
+    ),
+
+    # PDF TOOLS
+    Tool(
+        name="get_pdf_form_fields",
+        description="List fillable form fields in a PDF",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "filePath": {"type": "string", "description": "Path to PDF file"}
+            },
+            "required": ["filePath"]
+        }
+    ),
+    Tool(
+        name="fill_pdf_form",
+        description="Fill out form fields in a PDF and save",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "filePath": {"type": "string", "description": "Path to source PDF"},
+                "fields": {"type": "object", "description": "Field names mapped to values"},
+                "outputPath": {"type": "string", "description": "Output path (default: ~/Downloads)"},
+                "flatten": {"type": "boolean", "description": "Make fields non-editable", "default": False}
+            },
+            "required": ["filePath", "fields"]
+        }
+    ),
+    Tool(
+        name="sign_pdf",
+        description="Add signature image to a PDF",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "filePath": {"type": "string", "description": "Path to source PDF"},
+                "signatureImagePath": {"type": "string", "description": "Path to signature image (PNG/JPG)"},
+                "page": {"type": "number", "description": "Page number (1-indexed, -1 for last)", "default": -1},
+                "x": {"type": "number", "description": "X position in points"},
+                "y": {"type": "number", "description": "Y position in points"},
+                "width": {"type": "number", "description": "Signature width in points", "default": 150},
+                "outputPath": {"type": "string", "description": "Output path (default: ~/Downloads)"}
+            },
+            "required": ["filePath", "signatureImagePath"]
+        }
+    ),
+    Tool(
+        name="fill_and_sign_pdf",
+        description="Fill form fields and add signature in one step",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "filePath": {"type": "string", "description": "Path to source PDF"},
+                "signatureImagePath": {"type": "string", "description": "Path to signature image"},
+                "fields": {"type": "object", "description": "Field names mapped to values"},
+                "page": {"type": "number", "description": "Signature page (1-indexed, -1 for last)", "default": -1},
+                "x": {"type": "number", "description": "Signature X position"},
+                "y": {"type": "number", "description": "Signature Y position"},
+                "width": {"type": "number", "description": "Signature width", "default": 150},
+                "outputPath": {"type": "string", "description": "Output path (default: ~/Downloads)"},
+                "flatten": {"type": "boolean", "description": "Make fields non-editable", "default": False}
+            },
+            "required": ["filePath", "signatureImagePath"]
+        }
     )
 ]
 
@@ -359,6 +423,67 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
                 filename=arguments.get("filename"),
                 mime_type=arguments.get("mimeType"),
                 limit=int(arguments.get("limit", 20))
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        # PDF TOOLS
+        elif name == "get_pdf_form_fields":
+            file_path = arguments.get("filePath")
+            if not file_path:
+                return [TextContent(type="text", text="Error: filePath required")]
+            result = pdf_ops.get_form_fields(file_path)
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "fill_pdf_form":
+            file_path = arguments.get("filePath")
+            fields = arguments.get("fields")
+            if not file_path:
+                return [TextContent(type="text", text="Error: filePath required")]
+            if not fields:
+                return [TextContent(type="text", text="Error: fields required")]
+            result = pdf_ops.fill_form(
+                pdf_path=file_path,
+                fields=fields,
+                output_path=arguments.get("outputPath"),
+                flatten=arguments.get("flatten", False)
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "sign_pdf":
+            file_path = arguments.get("filePath")
+            sig_path = arguments.get("signatureImagePath")
+            if not file_path:
+                return [TextContent(type="text", text="Error: filePath required")]
+            if not sig_path:
+                return [TextContent(type="text", text="Error: signatureImagePath required")]
+            result = pdf_ops.add_signature(
+                pdf_path=file_path,
+                signature_image_path=sig_path,
+                page=int(arguments.get("page", -1)),
+                x=arguments.get("x"),
+                y=arguments.get("y"),
+                width=float(arguments.get("width", 150)),
+                output_path=arguments.get("outputPath")
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "fill_and_sign_pdf":
+            file_path = arguments.get("filePath")
+            sig_path = arguments.get("signatureImagePath")
+            if not file_path:
+                return [TextContent(type="text", text="Error: filePath required")]
+            if not sig_path:
+                return [TextContent(type="text", text="Error: signatureImagePath required")]
+            result = pdf_ops.fill_and_sign(
+                pdf_path=file_path,
+                signature_image_path=sig_path,
+                fields=arguments.get("fields"),
+                page=int(arguments.get("page", -1)),
+                x=arguments.get("x"),
+                y=arguments.get("y"),
+                width=float(arguments.get("width", 150)),
+                output_path=arguments.get("outputPath"),
+                flatten=arguments.get("flatten", False)
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 

@@ -3,6 +3,7 @@ pyproject.toml
 spark_mcp/__init__.py
 spark_mcp/database.py
 spark_mcp/extractors.py
+spark_mcp/pdf_operations.py
 spark_mcp/server.py
 spark_mcp_server.egg-info/PKG-INFO
 spark_mcp_server.egg-info/SOURCES.txt
