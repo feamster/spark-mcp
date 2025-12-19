@@ -5,7 +5,7 @@ import json
 from typing import Optional
 
 
-CONFIG_FILE = Path.home() / ".config" / "spark-mcp" / "config.json"
+CONFIG_FILE = Path.home() / ".mcp-config" / "spark" / "config.json"
 
 # Default configuration
 DEFAULTS = {
