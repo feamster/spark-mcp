@@ -271,9 +271,133 @@ TOOLS: list[Tool] = [
                 "y": {"type": "number", "description": "Signature Y position"},
                 "width": {"type": "number", "description": "Signature width", "default": 150},
                 "outputPath": {"type": "string", "description": "Output path (default: ~/Downloads)"},
-                "flatten": {"type": "boolean", "description": "Make fields non-editable", "default": False}
+                "flatten": {"type": "boolean", "description": "Make fields non-editable", "default": False},
+                "textAnnotations": {
+                    "type": "array",
+                    "description": "Text annotations for non-fillable blanks",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "page": {"type": "number", "description": "Page number (1-indexed, -1 for last)"},
+                            "text": {"type": "string", "description": "Text to add"},
+                            "x": {"type": "number", "description": "X position in points from left"},
+                            "y": {"type": "number", "description": "Y position in points from bottom"},
+                            "fontSize": {"type": "number", "description": "Font size", "default": 12}
+                        },
+                        "required": ["page", "text", "x", "y"]
+                    }
+                }
             },
             "required": ["filePath"]
+        }
+    ),
+
+    # PDF ANNOTATION AND TEMPLATE TOOLS
+    Tool(
+        name="annotate_pdf",
+        description="Add text annotations to any PDF at specified coordinates (works on PDFs without form fields)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "filePath": {"type": "string", "description": "Path to source PDF"},
+                "annotations": {
+                    "type": "array",
+                    "description": "List of text annotations to add",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "page": {"type": "number", "description": "Page number (1-indexed, -1 for last)"},
+                            "text": {"type": "string", "description": "Text to add"},
+                            "x": {"type": "number", "description": "X position in points from left"},
+                            "y": {"type": "number", "description": "Y position in points from bottom"},
+                            "fontSize": {"type": "number", "description": "Font size", "default": 12},
+                            "fontFamily": {"type": "string", "description": "Font family", "default": "helv"},
+                            "fontColor": {"type": "string", "description": "Hex color (e.g., '000000')", "default": "000000"}
+                        },
+                        "required": ["page", "text", "x", "y"]
+                    }
+                },
+                "outputPath": {"type": "string", "description": "Output path (default: ~/Downloads)"},
+                "flatten": {"type": "boolean", "description": "Make annotations permanent", "default": False}
+            },
+            "required": ["filePath", "annotations"]
+        }
+    ),
+    Tool(
+        name="get_pdf_layout",
+        description="Analyze PDF pages to find coordinates for annotations (helps position text on blank lines)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "filePath": {"type": "string", "description": "Path to PDF file"},
+                "page": {"type": "number", "description": "Specific page (1-indexed, -1 for last, omit for all)"},
+                "detectBlankLines": {"type": "boolean", "description": "Try to detect fill-in lines", "default": True}
+            },
+            "required": ["filePath"]
+        }
+    ),
+    Tool(
+        name="save_pdf_template",
+        description="Save a reusable template for filling PDFs with annotations",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "templateName": {"type": "string", "description": "Name for the template (e.g., 'protective_order')"},
+                "fields": {
+                    "type": "array",
+                    "description": "List of field definitions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "fieldName": {"type": "string", "description": "Name for this field (e.g., 'name', 'address')"},
+                            "page": {"type": "number", "description": "Page number (1-indexed, -1 for last)"},
+                            "x": {"type": "number", "description": "X position in points"},
+                            "y": {"type": "number", "description": "Y position in points from bottom"},
+                            "fontSize": {"type": "number", "description": "Font size", "default": 12},
+                            "type": {"type": "string", "enum": ["text", "signature", "date"], "default": "text"},
+                            "width": {"type": "number", "description": "Width for signature fields", "default": 150}
+                        },
+                        "required": ["fieldName", "page", "x", "y"]
+                    }
+                },
+                "description": {"type": "string", "description": "Description of the template"}
+            },
+            "required": ["templateName", "fields"]
+        }
+    ),
+    Tool(
+        name="list_pdf_templates",
+        description="List all saved PDF templates",
+        inputSchema={"type": "object", "properties": {}}
+    ),
+    Tool(
+        name="delete_pdf_template",
+        description="Delete a saved PDF template",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "templateName": {"type": "string", "description": "Name of template to delete"}
+            },
+            "required": ["templateName"]
+        }
+    ),
+    Tool(
+        name="fill_from_template",
+        description="Fill a PDF using a saved template",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "filePath": {"type": "string", "description": "Path to source PDF"},
+                "templateName": {"type": "string", "description": "Name of the saved template"},
+                "values": {
+                    "type": "object",
+                    "description": "Field values (use 'auto' for date fields to insert current date)"
+                },
+                "sign": {"type": "boolean", "description": "Add signature to signature fields", "default": False},
+                "signatureImagePath": {"type": "string", "description": "Path to signature image (optional)"},
+                "outputPath": {"type": "string", "description": "Output path (default: ~/Downloads)"}
+            },
+            "required": ["filePath", "templateName", "values"]
         }
     )
 ]
@@ -484,7 +608,80 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
                 width=float(arguments.get("width", 150)),
                 output_path=arguments.get("outputPath"),
                 flatten=arguments.get("flatten", False),
-                signature_field=arguments.get("signatureField")
+                signature_field=arguments.get("signatureField"),
+                text_annotations=arguments.get("textAnnotations")
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        # PDF ANNOTATION AND TEMPLATE TOOLS
+        elif name == "annotate_pdf":
+            file_path = arguments.get("filePath")
+            annotations = arguments.get("annotations")
+            if not file_path:
+                return [TextContent(type="text", text="Error: filePath required")]
+            if not annotations:
+                return [TextContent(type="text", text="Error: annotations required")]
+            result = pdf_ops.annotate_pdf(
+                pdf_path=file_path,
+                annotations=annotations,
+                output_path=arguments.get("outputPath"),
+                flatten=arguments.get("flatten", False)
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "get_pdf_layout":
+            file_path = arguments.get("filePath")
+            if not file_path:
+                return [TextContent(type="text", text="Error: filePath required")]
+            result = pdf_ops.get_pdf_layout(
+                pdf_path=file_path,
+                page=arguments.get("page"),
+                detect_blank_lines=arguments.get("detectBlankLines", True)
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "save_pdf_template":
+            template_name = arguments.get("templateName")
+            fields = arguments.get("fields")
+            if not template_name:
+                return [TextContent(type="text", text="Error: templateName required")]
+            if not fields:
+                return [TextContent(type="text", text="Error: fields required")]
+            result = pdf_ops.save_pdf_template(
+                template_name=template_name,
+                fields=fields,
+                description=arguments.get("description")
+            )
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "list_pdf_templates":
+            result = pdf_ops.list_pdf_templates()
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "delete_pdf_template":
+            template_name = arguments.get("templateName")
+            if not template_name:
+                return [TextContent(type="text", text="Error: templateName required")]
+            result = pdf_ops.delete_pdf_template(template_name)
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "fill_from_template":
+            file_path = arguments.get("filePath")
+            template_name = arguments.get("templateName")
+            values = arguments.get("values")
+            if not file_path:
+                return [TextContent(type="text", text="Error: filePath required")]
+            if not template_name:
+                return [TextContent(type="text", text="Error: templateName required")]
+            if not values:
+                return [TextContent(type="text", text="Error: values required")]
+            result = pdf_ops.fill_from_template(
+                pdf_path=file_path,
+                template_name=template_name,
+                values=values,
+                sign=arguments.get("sign", False),
+                signature_image_path=arguments.get("signatureImagePath"),
+                output_path=arguments.get("outputPath")
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 

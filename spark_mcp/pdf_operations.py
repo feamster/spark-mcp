@@ -1,9 +1,14 @@
 """PDF form filling and signature operations."""
 
+import json
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from .config import get_signature_path, get_output_dir
+from .config import (
+    get_signature_path, get_output_dir, get_templates_dir,
+    load_template, save_template as save_template_config,
+    list_templates as list_templates_config, delete_template as delete_template_config
+)
 
 
 def _get_default_output_dir() -> Path:
@@ -237,7 +242,8 @@ class PDFOperations:
         width: float = 150,
         output_path: Optional[str] = None,
         flatten: bool = False,
-        signature_field: Optional[str] = None
+        signature_field: Optional[str] = None,
+        text_annotations: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """Fill form fields and add signature in one operation.
 
@@ -252,6 +258,12 @@ class PDFOperations:
             output_path: Output path
             flatten: Whether to flatten form fields
             signature_field: Name of form field to place signature in (auto-positions)
+            text_annotations: List of text annotations for non-fillable blanks, each with:
+                - page: Page number (1-indexed, -1 for last)
+                - text: Text to add
+                - x: X position in points from left
+                - y: Y position in points from bottom
+                - fontSize: Font size (default: 12)
 
         Returns:
             Dict with output path and status
@@ -347,10 +359,45 @@ class PDFOperations:
 
         target_page.insert_image(final_rect, filename=str(sig_path))
 
+        # Add text annotations for non-fillable blanks
+        annotations_added = 0
+        if text_annotations:
+            for anno in text_annotations:
+                anno_page_num = anno.get('page', -1)
+                text = anno.get('text', '')
+                anno_x = anno.get('x', 0)
+                anno_y_from_bottom = anno.get('y', 0)
+                font_size = anno.get('fontSize', 12)
+
+                # Convert page number
+                if anno_page_num == -1:
+                    anno_page_idx = len(doc) - 1
+                else:
+                    anno_page_idx = anno_page_num - 1
+
+                if anno_page_idx < 0 or anno_page_idx >= len(doc):
+                    continue
+
+                anno_page = doc[anno_page_idx]
+                anno_page_height = anno_page.rect.height
+
+                # Convert y from bottom to y from top
+                anno_y = anno_page_height - anno_y_from_bottom
+
+                text_point = fitz.Point(anno_x, anno_y)
+                anno_page.insert_text(
+                    text_point,
+                    text,
+                    fontsize=font_size,
+                    fontname="helv",
+                    color=(0, 0, 0)
+                )
+                annotations_added += 1
+
         doc.save(str(out_path))
         doc.close()
 
-        return {
+        result = {
             'success': True,
             'outputPath': str(out_path),
             'fieldsUpdated': fields_updated,
@@ -362,6 +409,403 @@ class PDFOperations:
                 'height': final_rect.height
             }
         }
+        if annotations_added > 0:
+            result['annotationsAdded'] = annotations_added
+
+        return result
+
+    def annotate_pdf(
+        self,
+        pdf_path: str,
+        annotations: List[Dict[str, Any]],
+        output_path: Optional[str] = None,
+        flatten: bool = False
+    ) -> Dict[str, Any]:
+        """Add text annotations to any PDF at specified coordinates.
+
+        This works on any PDF, even those without fillable form fields.
+        Useful for filling in blank lines on legal documents.
+
+        Args:
+            pdf_path: Path to the source PDF
+            annotations: List of annotations, each with:
+                - page: Page number (1-indexed, -1 for last page)
+                - text: Text to add
+                - x: X position in points from left
+                - y: Y position in points from bottom (PDF coordinates)
+                - fontSize: Font size (default: 12)
+                - fontFamily: Font family (default: "helv" for Helvetica)
+                - fontColor: Hex color string (default: "000000")
+            output_path: Output path (default: ~/Downloads/{name}_annotated.pdf)
+            flatten: Make annotations permanent (default: False)
+
+        Returns:
+            Dict with output path and status
+        """
+        import fitz
+
+        path = Path(pdf_path).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"PDF not found: {pdf_path}")
+
+        if output_path:
+            out_path = Path(output_path).expanduser()
+        else:
+            out_path = _get_default_output_dir() / f"{path.stem}_annotated.pdf"
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        doc = fitz.open(str(path))
+        annotations_added = 0
+
+        for anno in annotations:
+            page_num = anno.get('page', -1)
+            text = anno.get('text', '')
+            x = anno.get('x', 0)
+            y_from_bottom = anno.get('y', 0)
+            font_size = anno.get('fontSize', 12)
+            font_family = anno.get('fontFamily', 'helv')
+            font_color_hex = anno.get('fontColor', '000000')
+
+            # Convert page number
+            if page_num == -1:
+                page_idx = len(doc) - 1
+            else:
+                page_idx = page_num - 1
+
+            if page_idx < 0 or page_idx >= len(doc):
+                continue
+
+            page = doc[page_idx]
+            page_height = page.rect.height
+
+            # Convert y from bottom (PDF standard) to y from top (fitz)
+            y = page_height - y_from_bottom
+
+            # Parse hex color
+            try:
+                r = int(font_color_hex[0:2], 16) / 255.0
+                g = int(font_color_hex[2:4], 16) / 255.0
+                b = int(font_color_hex[4:6], 16) / 255.0
+                color = (r, g, b)
+            except (ValueError, IndexError):
+                color = (0, 0, 0)
+
+            # Insert text
+            text_point = fitz.Point(x, y)
+            page.insert_text(
+                text_point,
+                text,
+                fontsize=font_size,
+                fontname=font_family,
+                color=color
+            )
+            annotations_added += 1
+
+        doc.save(str(out_path))
+        doc.close()
+
+        return {
+            'success': True,
+            'outputPath': str(out_path),
+            'annotationsAdded': annotations_added
+        }
+
+    def get_pdf_layout(
+        self,
+        pdf_path: str,
+        page: Optional[int] = None,
+        detect_blank_lines: bool = True
+    ) -> Dict[str, Any]:
+        """Analyze PDF pages to help determine annotation coordinates.
+
+        Args:
+            pdf_path: Path to the PDF file
+            page: Specific page number (1-indexed), or None for all pages
+            detect_blank_lines: Try to detect signature/fill lines (default: True)
+
+        Returns:
+            Dict with page dimensions and detected features
+        """
+        import fitz
+
+        path = Path(pdf_path).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"PDF not found: {pdf_path}")
+
+        doc = fitz.open(str(path))
+        pages_info = []
+
+        # Determine which pages to analyze
+        if page is not None:
+            if page == -1:
+                page_indices = [len(doc) - 1]
+            else:
+                page_indices = [page - 1]
+        else:
+            page_indices = range(len(doc))
+
+        for page_idx in page_indices:
+            if page_idx < 0 or page_idx >= len(doc):
+                continue
+
+            doc_page = doc[page_idx]
+            page_rect = doc_page.rect
+
+            page_info = {
+                'pageNumber': page_idx + 1,
+                'width': page_rect.width,
+                'height': page_rect.height,
+                'textBlocks': [],
+                'blankLines': []
+            }
+
+            # Extract text blocks with positions
+            text_dict = doc_page.get_text("dict")
+            for block in text_dict.get("blocks", []):
+                if block.get("type") == 0:  # Text block
+                    for line in block.get("lines", []):
+                        line_text = ""
+                        x0 = line["bbox"][0]
+                        y_from_top = line["bbox"][1]
+
+                        for span in line.get("spans", []):
+                            line_text += span.get("text", "")
+
+                        if line_text.strip():
+                            # Convert y from top to y from bottom
+                            y_from_bottom = page_rect.height - y_from_top
+                            page_info['textBlocks'].append({
+                                'text': line_text.strip()[:100],  # Truncate long text
+                                'x': round(x0, 1),
+                                'y': round(y_from_bottom, 1),
+                                'yFromTop': round(y_from_top, 1)
+                            })
+
+            # Detect blank lines (underscores, form lines)
+            if detect_blank_lines:
+                # Look for horizontal lines that might be fill-in blanks
+                drawings = doc_page.get_drawings()
+                for drawing in drawings:
+                    if drawing.get("type") == "l":  # Line
+                        items = drawing.get("items", [])
+                        for item in items:
+                            if item[0] == "l":  # Line item
+                                p1, p2 = item[1], item[2]
+                                # Check if roughly horizontal (within 5 points)
+                                if abs(p1.y - p2.y) < 5 and abs(p2.x - p1.x) > 30:
+                                    y_from_bottom = page_rect.height - min(p1.y, p2.y)
+                                    page_info['blankLines'].append({
+                                        'xStart': round(min(p1.x, p2.x), 1),
+                                        'xEnd': round(max(p1.x, p2.x), 1),
+                                        'y': round(y_from_bottom, 1),
+                                        'yFromTop': round(min(p1.y, p2.y), 1)
+                                    })
+
+                # Also look for series of underscores
+                text = doc_page.get_text()
+                underscore_pattern = '_' * 5  # At least 5 underscores
+                if underscore_pattern in text:
+                    # Find text blocks containing underscores
+                    for block in page_info['textBlocks']:
+                        if underscore_pattern in block.get('text', ''):
+                            block['isBlankLine'] = True
+
+            pages_info.append(page_info)
+
+        doc.close()
+
+        return {
+            'success': True,
+            'totalPages': len(doc),
+            'pages': pages_info
+        }
+
+    def save_pdf_template(
+        self,
+        template_name: str,
+        fields: List[Dict[str, Any]],
+        description: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Save a PDF template for reuse.
+
+        Args:
+            template_name: Name for the template (e.g., "protective_order_appendix_a")
+            fields: List of field definitions, each with:
+                - fieldName: Name for this field (e.g., "name", "address")
+                - page: Page number (1-indexed, -1 for last)
+                - x: X position in points
+                - y: Y position in points from bottom
+                - fontSize: Font size (default: 12)
+                - type: "text", "signature", or "date"
+            description: Optional description of the template
+
+        Returns:
+            Dict with success status and template path
+        """
+        template_data = {
+            "name": template_name,
+            "description": description or "",
+            "fields": fields
+        }
+
+        template_path = save_template_config(template_name, template_data)
+
+        return {
+            'success': True,
+            'templateName': template_name,
+            'templatePath': str(template_path),
+            'fieldCount': len(fields)
+        }
+
+    def list_pdf_templates(self) -> Dict[str, Any]:
+        """List all saved PDF templates."""
+        templates = list_templates_config()
+        return {
+            'success': True,
+            'templates': templates,
+            'total': len(templates)
+        }
+
+    def delete_pdf_template(self, template_name: str) -> Dict[str, Any]:
+        """Delete a saved PDF template."""
+        deleted = delete_template_config(template_name)
+        return {
+            'success': deleted,
+            'templateName': template_name,
+            'message': f"Template '{template_name}' deleted" if deleted else f"Template '{template_name}' not found"
+        }
+
+    def fill_from_template(
+        self,
+        pdf_path: str,
+        template_name: str,
+        values: Dict[str, str],
+        sign: bool = False,
+        signature_image_path: Optional[str] = None,
+        output_path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Fill a PDF using a saved template.
+
+        Args:
+            pdf_path: Path to the source PDF
+            template_name: Name of the saved template
+            values: Dict mapping field names to values
+                - Use "auto" for date fields to insert current date
+            sign: Whether to add signature (default: False)
+            signature_image_path: Path to signature image (uses config default if not provided)
+            output_path: Output path (default: ~/Downloads/{name}_filled.pdf)
+
+        Returns:
+            Dict with output path and status
+        """
+        import fitz
+        from datetime import datetime
+
+        path = Path(pdf_path).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"PDF not found: {pdf_path}")
+
+        template = load_template(template_name)
+        if not template:
+            raise ValueError(f"Template not found: {template_name}")
+
+        if output_path:
+            out_path = Path(output_path).expanduser()
+        else:
+            out_path = _get_default_output_dir() / f"{path.stem}_filled.pdf"
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        doc = fitz.open(str(path))
+        fields_filled = 0
+        signature_added = False
+
+        for field in template.get("fields", []):
+            field_name = field.get("fieldName")
+            field_type = field.get("type", "text")
+            page_num = field.get("page", -1)
+            x = field.get("x", 0)
+            y_from_bottom = field.get("y", 0)
+            font_size = field.get("fontSize", 12)
+
+            # Get value for this field
+            value = values.get(field_name)
+            if value is None:
+                continue
+
+            # Handle auto date
+            if field_type == "date" and value.lower() == "auto":
+                value = datetime.now().strftime("%B %d, %Y")
+
+            # Handle signature field
+            if field_type == "signature":
+                if sign:
+                    # Add signature at this position
+                    if signature_image_path:
+                        sig_path = Path(signature_image_path).expanduser()
+                    else:
+                        default_sig = get_signature_path()
+                        if not default_sig:
+                            continue
+                        sig_path = Path(default_sig)
+
+                    if sig_path.exists():
+                        if page_num == -1:
+                            page_idx = len(doc) - 1
+                        else:
+                            page_idx = page_num - 1
+
+                        if 0 <= page_idx < len(doc):
+                            page = doc[page_idx]
+                            page_height = page.rect.height
+                            y = page_height - y_from_bottom
+
+                            # Calculate signature size
+                            width = field.get("width", 150)
+                            img = fitz.Pixmap(str(sig_path))
+                            aspect_ratio = img.height / img.width
+                            sig_height = width * aspect_ratio
+
+                            sig_rect = fitz.Rect(x, y - sig_height, x + width, y)
+                            page.insert_image(sig_rect, filename=str(sig_path))
+                            signature_added = True
+                continue
+
+            # Add text annotation
+            if page_num == -1:
+                page_idx = len(doc) - 1
+            else:
+                page_idx = page_num - 1
+
+            if 0 <= page_idx < len(doc):
+                page = doc[page_idx]
+                page_height = page.rect.height
+                y = page_height - y_from_bottom
+
+                text_point = fitz.Point(x, y)
+                page.insert_text(
+                    text_point,
+                    value,
+                    fontsize=font_size,
+                    fontname="helv",
+                    color=(0, 0, 0)
+                )
+                fields_filled += 1
+
+        doc.save(str(out_path))
+        doc.close()
+
+        result = {
+            'success': True,
+            'outputPath': str(out_path),
+            'templateName': template_name,
+            'fieldsFilled': fields_filled
+        }
+        if sign:
+            result['signatureAdded'] = signature_added
+
+        return result
 
 
 # Singleton instance
