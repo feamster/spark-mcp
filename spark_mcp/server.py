@@ -281,10 +281,11 @@ TOOLS: list[Tool] = [
                             "page": {"type": "number", "description": "Page number (1-indexed, -1 for last)"},
                             "text": {"type": "string", "description": "Text to add"},
                             "x": {"type": "number", "description": "X position in points from left"},
-                            "y": {"type": "number", "description": "Y position in points from bottom"},
+                            "y": {"type": "number", "description": "Y position in points from bottom (PDF coords)"},
+                            "yFromTop": {"type": "number", "description": "Y position from top (PyMuPDF coords, preferred)"},
                             "fontSize": {"type": "number", "description": "Font size", "default": 12}
                         },
-                        "required": ["page", "text", "x", "y"]
+                        "required": ["page", "text", "x"]
                     }
                 }
             },
@@ -309,12 +310,13 @@ TOOLS: list[Tool] = [
                             "page": {"type": "number", "description": "Page number (1-indexed, -1 for last)"},
                             "text": {"type": "string", "description": "Text to add"},
                             "x": {"type": "number", "description": "X position in points from left"},
-                            "y": {"type": "number", "description": "Y position in points from bottom"},
+                            "y": {"type": "number", "description": "Y position in points from bottom (PDF coords)"},
+                            "yFromTop": {"type": "number", "description": "Y position from top (PyMuPDF coords, preferred)"},
                             "fontSize": {"type": "number", "description": "Font size", "default": 12},
                             "fontFamily": {"type": "string", "description": "Font family", "default": "helv"},
                             "fontColor": {"type": "string", "description": "Hex color (e.g., '000000')", "default": "000000"}
                         },
-                        "required": ["page", "text", "x", "y"]
+                        "required": ["page", "text", "x"]
                     }
                 },
                 "outputPath": {"type": "string", "description": "Output path (default: ~/Downloads)"},
