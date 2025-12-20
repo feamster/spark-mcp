@@ -613,11 +613,12 @@ class PDFOperations:
 
             pages_info.append(page_info)
 
+        total_pages = len(doc)
         doc.close()
 
         return {
             'success': True,
-            'totalPages': len(doc),
+            'totalPages': total_pages,
             'pages': pages_info
         }
 
