@@ -366,7 +366,6 @@ class PDFOperations:
                 anno_page_num = anno.get('page', -1)
                 text = anno.get('text', '')
                 anno_x = anno.get('x', 0)
-                anno_y_from_bottom = anno.get('y', 0)
                 font_size = anno.get('fontSize', 12)
 
                 # Convert page number
@@ -381,8 +380,12 @@ class PDFOperations:
                 anno_page = doc[anno_page_idx]
                 anno_page_height = anno_page.rect.height
 
-                # Convert y from bottom to y from top
-                anno_y = anno_page_height - anno_y_from_bottom
+                # Support both yFromTop (direct fitz coords) and y (from bottom)
+                if 'yFromTop' in anno:
+                    anno_y = anno.get('yFromTop', 0)
+                else:
+                    anno_y_from_bottom = anno.get('y', 0)
+                    anno_y = anno_page_height - anno_y_from_bottom
 
                 text_point = fitz.Point(anno_x, anno_y)
                 anno_page.insert_text(
@@ -462,7 +465,6 @@ class PDFOperations:
             page_num = anno.get('page', -1)
             text = anno.get('text', '')
             x = anno.get('x', 0)
-            y_from_bottom = anno.get('y', 0)
             font_size = anno.get('fontSize', 12)
             font_family = anno.get('fontFamily', 'helv')
             font_color_hex = anno.get('fontColor', '000000')
@@ -479,8 +481,13 @@ class PDFOperations:
             page = doc[page_idx]
             page_height = page.rect.height
 
-            # Convert y from bottom (PDF standard) to y from top (fitz)
-            y = page_height - y_from_bottom
+            # Support both yFromTop (direct fitz coords) and y (from bottom)
+            if 'yFromTop' in anno:
+                y = anno.get('yFromTop', 0)
+            else:
+                # Convert y from bottom (PDF standard) to y from top (fitz)
+                y_from_bottom = anno.get('y', 0)
+                y = page_height - y_from_bottom
 
             # Parse hex color
             try:
