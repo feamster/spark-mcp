@@ -239,6 +239,7 @@ class PDFOperations:
         page: int = -1,
         x: Optional[float] = None,
         y: Optional[float] = None,
+        y_from_top: Optional[float] = None,
         width: float = 150,
         output_path: Optional[str] = None,
         flatten: bool = False,
@@ -253,7 +254,9 @@ class PDFOperations:
             fields: Dict mapping field names to string values (for text fields)
             checkboxes: Dict mapping field names to bool values (for checkboxes)
             page: Page number for signature (1-indexed, -1 for last)
-            x, y: Signature position coordinates (if not using signature_field)
+            x: Signature X position in points from left
+            y: Signature Y position in points (fitz coords, top of signature)
+            y_from_top: Y position of signature LINE from top - signature bottom aligns here
             width: Signature width in points
             output_path: Output path
             flatten: Whether to flatten form fields
@@ -262,7 +265,7 @@ class PDFOperations:
                 - page: Page number (1-indexed, -1 for last)
                 - text: Text to add
                 - x: X position in points from left
-                - y: Y position in points from bottom
+                - yFromTop: Y position from top (preferred)
                 - fontSize: Font size (default: 12)
 
         Returns:
@@ -353,9 +356,20 @@ class PDFOperations:
             margin = 50
             if x is None:
                 x = page_rect.width - sig_width - margin
-            if y is None:
+
+            # Handle y coordinate - support yFromTop where signature bottom aligns with line
+            if y_from_top is not None:
+                # yFromTop specifies where the signature LINE is
+                # Place signature so its BOTTOM aligns with this line
+                sig_top = y_from_top - sig_height
+                final_rect = fitz.Rect(x, sig_top, x + sig_width, y_from_top)
+            elif y is not None:
+                # y is the top of the signature in fitz coords
+                final_rect = fitz.Rect(x, y, x + sig_width, y + sig_height)
+            else:
+                # Default to bottom-right
                 y = page_rect.height - sig_height - margin
-            final_rect = fitz.Rect(x, y, x + sig_width, y + sig_height)
+                final_rect = fitz.Rect(x, y, x + sig_width, y + sig_height)
 
         target_page.insert_image(final_rect, filename=str(sig_path))
 
