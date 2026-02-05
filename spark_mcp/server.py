@@ -97,13 +97,17 @@ SEARCH STRATEGY (do this in order):
 4. For phrases, use quotes: "exact phrase here"
 
 EXAMPLES:
-- Looking for "Bittner about NetApp"? First try list_emails with sender="bittner", OR search for just "NetApp"
+- Looking for "Bittner about NetApp"? Use sender="bittner" + query="NetApp" + sort_by="date"
 - Looking for invoice #INV-123? Search for "INV-123" alone
-- Multi-word searches like "John Smith project update" will likely fail - try "project update" or check sender="john.smith" """,
+- Recent emails about a topic? Use query + sort_by="date" to get newest first""",
         inputSchema={
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search terms. Use single keywords for best results. Multiple words are AND-ed together."},
+                "sender": {"type": "string", "description": "Filter by sender email/name (partial match). Combine with query for 'emails from X about Y'."},
+                "start_date": {"type": "string", "description": "ISO date (YYYY-MM-DD). Only emails after this date."},
+                "end_date": {"type": "string", "description": "ISO date (YYYY-MM-DD). Only emails before this date."},
+                "sort_by": {"type": "string", "description": "relevance (default) or date (newest first)", "default": "relevance"},
                 "limit": {"type": "number", "description": "Max results", "default": 10}
             },
             "required": ["query"]
@@ -486,6 +490,10 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
                 return [TextContent(type="text", text="Error: query required")]
             result = db.search_emails(
                 query=query,
+                sender=arguments.get("sender"),
+                start_date=arguments.get("start_date"),
+                end_date=arguments.get("end_date"),
+                sort_by=arguments.get("sort_by", "relevance"),
                 limit=int(arguments.get("limit", 10))
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]

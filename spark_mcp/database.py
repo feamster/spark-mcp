@@ -541,6 +541,8 @@ class SparkDatabase:
         query: str,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        sender: Optional[str] = None,
+        sort_by: str = "relevance",
         limit: int = 20
     ) -> Dict[str, Any]:
         """Search emails using full-text search.
@@ -549,6 +551,8 @@ class SparkDatabase:
             query: Search query (FTS5 syntax)
             start_date: Filter after this ISO date
             end_date: Filter before this ISO date
+            sender: Filter by sender email/name (partial match)
+            sort_by: "relevance" or "date" (newest first)
             limit: Maximum results
 
         Returns:
@@ -596,6 +600,10 @@ class SparkDatabase:
             where_clauses.append("receivedDate <= ?")
             params.append(end_ts)
 
+        if sender:
+            where_clauses.append("messageFrom LIKE ?")
+            params.append(f"%{sender}%")
+
         where_clause = " AND ".join(where_clauses)
 
         query_sql = f"""
@@ -603,7 +611,8 @@ class SparkDatabase:
                 pk,
                 subject,
                 messageFrom as sender,
-                datetime(receivedDate, 'unixepoch') as receivedDate
+                datetime(receivedDate, 'unixepoch') as receivedDate,
+                receivedDate as receivedTimestamp
             FROM messages
             WHERE {where_clause}
         """
@@ -625,11 +634,22 @@ class SparkDatabase:
                     'subject': meta['subject'] or '(No Subject)',
                     'sender': meta['sender'] or 'Unknown',
                     'receivedDate': meta['receivedDate'],
+                    'receivedTimestamp': meta['receivedTimestamp'],
                     'excerpt': fts_row['excerpt'] or '',
                     'relevanceScore': -fts_row['rank']
                 })
-                if len(results) >= limit:
-                    break
+
+        # Sort results
+        if sort_by == "date":
+            results.sort(key=lambda x: x['receivedTimestamp'], reverse=True)
+        # else: keep FTS relevance order
+
+        # Apply limit after sorting
+        results = results[:limit]
+
+        # Remove internal timestamp field
+        for r in results:
+            del r['receivedTimestamp']
 
         return {'results': results, 'total': len(results)}
 
