@@ -64,22 +64,46 @@ TOOLS: list[Tool] = [
     # EMAIL TOOLS
     Tool(
         name="list_emails",
-        description="List recent emails",
+        description="""List recent emails from a folder. PREFERRED for finding emails by sender or recent activity.
+
+WHEN TO USE THIS vs search_emails:
+- Use list_emails when looking for emails FROM a specific person (use sender filter)
+- Use list_emails when looking for recent correspondence
+- Use list_emails first to browse recent activity, then search_emails for specific content
+
+This tool is more reliable than search_emails for finding threads by correspondent.""",
         inputSchema={
             "type": "object",
             "properties": {
                 "folder": {"type": "string", "description": "inbox/sent/all", "default": "inbox"},
+                "sender": {"type": "string", "description": "Filter by sender email or name (partial match)"},
                 "limit": {"type": "number", "description": "Max results", "default": 20}
             }
         }
     ),
     Tool(
         name="search_emails",
-        description="Search email content",
+        description="""Search email body content using SQLite FTS5 full-text search.
+
+IMPORTANT - FTS5 BEHAVIOR:
+- Multiple words are AND-ed: "Bittner NetApp" only matches if BOTH words appear in the email body
+- This often FAILS for finding threads because names may be in headers/signatures, not body text
+- If a multi-word search returns nothing, TRY EACH WORD SEPARATELY
+
+SEARCH STRATEGY (do this in order):
+1. First try list_emails with sender filter to find emails from a person
+2. If searching for a topic/project, use a SINGLE distinctive keyword, not multiple words
+3. If first search fails, try alternative terms (company name, project name, invoice number separately)
+4. For phrases, use quotes: "exact phrase here"
+
+EXAMPLES:
+- Looking for "Bittner about NetApp"? First try list_emails with sender="bittner", OR search for just "NetApp"
+- Looking for invoice #INV-123? Search for "INV-123" alone
+- Multi-word searches like "John Smith project update" will likely fail - try "project update" or check sender="john.smith" """,
         inputSchema={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Search terms"},
+                "query": {"type": "string", "description": "Search terms. Use single keywords for best results. Multiple words are AND-ed together."},
                 "limit": {"type": "number", "description": "Max results", "default": 10}
             },
             "required": ["query"]
@@ -451,6 +475,7 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
         elif name == "list_emails":
             result = db.list_emails(
                 folder=arguments.get("folder", "inbox"),
+                sender=arguments.get("sender"),
                 limit=int(arguments.get("limit", 20))
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
