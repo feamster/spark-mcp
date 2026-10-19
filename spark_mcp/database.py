@@ -9,8 +9,11 @@ from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timedelta
 
 
-SPARK_BASE = Path.home() / "Library/Containers/com.readdle.SparkDesktop.appstore/Data/Library/Application Support/Spark Desktop/core-data"
-SPARK_CACHE = Path.home() / "Library/Containers/com.readdle.SparkDesktop.appstore/Data/Library/Caches/Spark Desktop"
+_APPSTORE_LIB = Path.home() / "Library/Containers/com.readdle.SparkDesktop.appstore/Data/Library"
+# Direct-download (non-App Store) Spark is not sandboxed and keeps its data under ~/Library
+_SPARK_LIB = _APPSTORE_LIB if (_APPSTORE_LIB / "Application Support/Spark Desktop/core-data").exists() else Path.home() / "Library"
+SPARK_BASE = _SPARK_LIB / "Application Support/Spark Desktop/core-data"
+SPARK_CACHE = _SPARK_LIB / "Caches/Spark Desktop"
 
 
 # Generic localparts that should not be treated as person names when building
