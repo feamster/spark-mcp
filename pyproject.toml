@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "MCP server for accessing Spark Desktop meeting transcripts"
 requires-python = ">=3.10"
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=2.3,<3",
     "pypdf>=4.0.0",
     "python-docx>=1.0.0",
     "openpyxl>=3.1.0",
@@ -17,3 +17,7 @@ dependencies = [
 
 [project.scripts]
 spark-mcp = "spark_mcp.server:main"
+
+[tool.uv]
+# Run in place with `uv run`; dependencies only, no package build
+package = false
