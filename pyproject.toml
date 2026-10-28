@@ -21,3 +21,6 @@ spark-mcp = "spark_mcp.server:main"
 [tool.uv]
 # Run in place with `uv run`; dependencies only, no package build
 package = false
+# Intel Macs: pymupdf 2.x has no x86_64 macOS wheel and needs onnxruntime 1.31,
+# which has no x86_64 macOS wheel or sdist. Stay on pymupdf 1.x there.
+constraint-dependencies = ["pymupdf<2; sys_platform == 'darwin' and platform_machine == 'x86_64'"]
