@@ -3,11 +3,15 @@
 
 import asyncio
 import json
+import os
+import sqlite3
+import time
+from pathlib import Path
 from typing import Any, Sequence
 from mcp.server import Server
 from mcp.types import CallToolResult, ListToolsResult, Tool, TextContent, GetPromptResult
 from mcp.server.stdio import stdio_server
-from .database import SparkDatabase
+from .database import QueryTimeout, SparkDatabase
 from .pdf_operations import pdf_ops
 
 
@@ -469,8 +473,52 @@ async def list_tools() -> list[Tool]:
     return TOOLS
 
 
+# Hard cap on a single tool call's database work, well under the 60s MCP
+# client timeout so callers get an error instead of a silent hang.
+TOOL_TIMEOUT_SECONDS = 45
+
+
+# Append-only request log: the Claude desktop bridge does not log individual
+# tool calls, so this is the only record of whether a call reached us.
+REQUEST_LOG = Path.home() / "Library/Logs/spark-mcp/requests.log"
+
+
+def _log_request(event: str, name: str, detail: str = "") -> None:
+    try:
+        REQUEST_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(REQUEST_LOG, "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} pid={os.getpid()} {event} {name} {detail}\n")
+    except OSError:
+        pass
+
+
 async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
-    """Handle tool calls."""
+    """Handle tool calls.
+
+    Tool work is blocking (SQLite, PDF I/O), so it runs in a worker thread to
+    keep the event loop free: one slow call no longer stalls every other
+    request queued behind it.
+    """
+    _log_request("start", name, json.dumps(arguments, default=str)[:300])
+    t0 = time.monotonic()
+    try:
+        result = await asyncio.to_thread(_call_tool_with_deadline, name, arguments)
+    except BaseException as e:
+        _log_request("abort", name, f"{time.monotonic() - t0:.2f}s {type(e).__name__}")
+        raise
+    _log_request("done", name, f"{time.monotonic() - t0:.2f}s {sum(len(c.text) for c in result)} chars")
+    return result
+
+
+def _call_tool_with_deadline(name: str, arguments: Any) -> Sequence[TextContent]:
+    try:
+        with db.deadline(TOOL_TIMEOUT_SECONDS):
+            return _call_tool_sync(name, arguments)
+    except QueryTimeout as e:
+        return [TextContent(type="text", text=f"Error: {name} timed out: {e}")]
+
+
+def _call_tool_sync(name: str, arguments: Any) -> Sequence[TextContent]:
     try:
         # TRANSCRIPT TOOLS
         if name == "list_meeting_transcripts":
@@ -772,6 +820,8 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
     except Exception as e:
+        if isinstance(e, sqlite3.OperationalError) and "interrupted" in str(e):
+            raise  # deadline hit; db.deadline() reports it as QueryTimeout
         return [TextContent(type="text", text=f"Error: {str(e)}")]
 
 

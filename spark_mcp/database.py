@@ -3,7 +3,9 @@
 import sqlite3
 import json
 import re
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timedelta
@@ -14,6 +16,17 @@ _APPSTORE_LIB = Path.home() / "Library/Containers/com.readdle.SparkDesktop.appst
 _SPARK_LIB = _APPSTORE_LIB if (_APPSTORE_LIB / "Application Support/Spark Desktop/core-data").exists() else Path.home() / "Library"
 SPARK_BASE = _SPARK_LIB / "Application Support/Spark Desktop/core-data"
 SPARK_CACHE = _SPARK_LIB / "Caches/Spark Desktop"
+
+# Upper bound on FTS candidates scanned when search_emails has to filter or
+# re-sort the match set (date/sender filters, sort_by="date").
+FILTERED_FTS_CANDIDATE_CAP = 20000
+
+# SQLite VM instructions between deadline checks in the progress handler.
+_PROGRESS_HANDLER_STEPS = 10000
+
+
+class QueryTimeout(Exception):
+    """Raised when a database call runs past its deadline (see SparkDatabase.deadline)."""
 
 
 # Generic localparts that should not be treated as person names when building
@@ -183,6 +196,38 @@ class SparkDatabase:
         if not self.calendar_db_path.exists():
             raise FileNotFoundError(f"Calendar database not found at {self.calendar_db_path}")
 
+        # Per-thread deadline (time.monotonic() value) enforced on every
+        # connection via a progress handler; None means no deadline.
+        self._local = threading.local()
+
+    @contextmanager
+    def deadline(self, seconds: float):
+        """Abort any SQLite work on this thread that runs longer than `seconds`.
+
+        Queries past the deadline are interrupted by the progress handler and
+        surface as QueryTimeout, so a pathological query fails fast instead of
+        holding the request until the MCP client gives up.
+        """
+        self._local.deadline = time.monotonic() + seconds
+        self._local.timeout = seconds
+        try:
+            yield
+        except sqlite3.OperationalError as e:
+            if "interrupted" in str(e) and self._deadline_passed():
+                raise QueryTimeout(f"query exceeded {seconds:g}s and was aborted") from e
+            raise
+        finally:
+            self._local.deadline = None
+
+    def _deadline_passed(self) -> bool:
+        deadline = getattr(self._local, "deadline", None)
+        return deadline is not None and time.monotonic() > deadline
+
+    def _install_deadline(self, conn: sqlite3.Connection) -> None:
+        # Returning non-zero from the handler makes SQLite abort the statement
+        # with "interrupted".
+        conn.set_progress_handler(lambda: 1 if self._deadline_passed() else 0, _PROGRESS_HANDLER_STEPS)
+
     def _connect(self, db_path: Path) -> sqlite3.Connection:
         """Open a Spark SQLite database read-only, resilient to live writes.
 
@@ -205,6 +250,7 @@ class SparkDatabase:
                 conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
                 conn.row_factory = sqlite3.Row
                 conn.execute("PRAGMA query_only = ON")
+                self._install_deadline(conn)
                 return conn
             except sqlite3.OperationalError as e:
                 last_err = e
@@ -215,6 +261,7 @@ class SparkDatabase:
         conn = sqlite3.connect(f"file:{db_path}?immutable=1", uri=True, timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA query_only = ON")
+        self._install_deadline(conn)
         return conn
 
     def _connect_messages(self) -> sqlite3.Connection:
@@ -912,7 +959,19 @@ class SparkDatabase:
             "signature_fallback_used": False,
         }
 
-        fts_rows = self._fts_body_search(query, limit * 2)
+        # With filters or date ordering, the top-by-relevance slice can miss
+        # every qualifying message (e.g. a common word plus a recent date
+        # window), so filter across the whole match set and only compute
+        # snippets for the rows we return.
+        filtered = sort_by == "date" or any(
+            [start_date, end_date, sender, sender_name, sender_email, sender_domain]
+        )
+        if filtered:
+            fts_rows = self._fts_candidates(query, FILTERED_FTS_CANDIDATE_CAP)
+            diagnostics["candidates_scanned"] = len(fts_rows)
+            diagnostics["candidates_truncated"] = len(fts_rows) >= FILTERED_FTS_CANDIDATE_CAP
+        else:
+            fts_rows = self._fts_body_search(query, limit * 2)
         if not fts_rows:
             result: Dict[str, Any] = {'results': [], 'total': 0}
             if verbose:
@@ -932,6 +991,10 @@ class SparkDatabase:
             limit=limit,
         )
         diagnostics.update(used_diag)
+        if filtered and results:
+            excerpts = self._fts_excerpts(query, [r['messagePk'] for r in results])
+            for r in results:
+                r['excerpt'] = excerpts.get(r['messagePk'], '')
 
         result = {'results': results, 'total': len(results)}
         if verbose:
@@ -959,6 +1022,46 @@ class SparkDatabase:
         finally:
             search_conn.close()
 
+    def _fts_candidates(self, query: str, cap: int) -> List[Dict[str, Any]]:
+        """Return up to `cap` FTS matches (pk + rank, best first) without snippets."""
+        search_conn = self._connect_search()
+        try:
+            cursor = search_conn.execute(
+                """
+                SELECT messagePk, rank
+                FROM messagesfts
+                WHERE searchBody MATCH ?
+                ORDER BY rank
+                LIMIT ?
+                """,
+                (query, cap),
+            )
+            return [
+                {'messagePk': row['messagePk'], 'rank': row['rank'], 'excerpt': None}
+                for row in cursor.fetchall()
+            ]
+        finally:
+            search_conn.close()
+
+    def _fts_excerpts(self, query: str, message_pks: List[int]) -> Dict[int, str]:
+        """Compute FTS snippets for just the given message pks."""
+        pk_list = ','.join(str(int(pk)) for pk in message_pks)
+        search_conn = self._connect_search()
+        try:
+            cursor = search_conn.execute(
+                f"""
+                SELECT
+                    messagePk,
+                    snippet(messagesfts, 4, '<mark>', '</mark>', '...', 64) as excerpt
+                FROM messagesfts
+                WHERE searchBody MATCH ? AND messagePk IN ({pk_list})
+                """,
+                (query,),
+            )
+            return {row['messagePk']: row['excerpt'] or '' for row in cursor.fetchall()}
+        finally:
+            search_conn.close()
+
     def _filter_fts_by_sender(
         self,
         fts_rows: List[sqlite3.Row],
@@ -974,13 +1077,14 @@ class SparkDatabase:
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Filter FTS-matched messages by sender and date, return ordered results."""
         diagnostics: Dict[str, Any] = {}
-        message_pks = [row['messagePk'] for row in fts_rows]
-        placeholders = ','.join('?' * len(message_pks))
+        # pks are integers from the FTS index; inline them rather than binding
+        # one parameter each, which can exceed SQLite's variable limit.
+        pk_list = ','.join(str(int(row['messagePk'])) for row in fts_rows)
         base_clauses = [
-            f"pk IN ({placeholders})",
+            f"pk IN ({pk_list})",
             "(meta NOT LIKE '%mtid%' OR meta IS NULL)",
         ]
-        base_params: List[Any] = list(message_pks)
+        base_params: List[Any] = []
 
         if start_date:
             start_ts = int(datetime.fromisoformat(start_date).timestamp())
